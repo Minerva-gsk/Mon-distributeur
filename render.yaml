@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: mon-distributeur
+    env: node
+    buildCommand: npm install
+    startCommand: node server.js
