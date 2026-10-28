@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="fr">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connexion</title>
+<style>
+:root{--hi:#2a2a2a;--mut:#b3b3b3}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:linear-gradient(#3a2f10,#0b0b0b 320px) no-repeat,#0b0b0b;color:#fff;font-family:system-ui,sans-serif;padding:24px 16px}
+h1{font-family:Georgia,serif;color:#f0d77a;letter-spacing:1px;margin:12px 0 4px}
+h2{font-family:Georgia,serif;color:#f0d77a;margin:8px 0}
+p.s{color:var(--mut);margin:0 0 20px}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tabs button{flex:1;font:inherit;padding:12px;border-radius:30px;border:1px solid #5a4a1a;background:transparent;color:var(--mut)}
+.tabs button.on{background:linear-gradient(135deg,#f5d77a,#d4af37 50%,#9c7a1c);color:#000;font-weight:700;border:0}
+label{display:block;margin-top:12px;color:var(--mut);font-size:13px}
+input{font:inherit;width:100%;padding:12px;margin-top:4px;border-radius:8px;border:0;background:var(--hi);color:#fff}
+input.code{text-align:center;font-size:26px;letter-spacing:8px}
+.btn{font:inherit;background:linear-gradient(135deg,#f5d77a,#d4af37 50%,#9c7a1c);color:#000;border:0;padding:14px;border-radius:30px;font-weight:700;width:100%;margin-top:20px}
+.btn:disabled{opacity:.6}
+a.l{display:block;margin-top:16px;color:#f0d77a;text-align:center;font-size:14px}
+.v{display:none}.v.on{display:block}
+#msg{min-height:20px;margin-top:12px;color:#ff8a8a}
+#msg.ok{color:#9ccc65}
+</style>
+<h1>Distributeur Musique</h1>
+<p class="s">Distribue ta musique sur les plateformes</p>
+
+<div id="v-auth" class="v on">
+  <div class="tabs">
+    <button id="tl" class="on" type="button">Connexion</button>
+    <button id="tr" type="button">Créer un compte</button>
+  </div>
+  <form id="f">
+<div id="choixbox" style="display:none">
+<p class="chl">Recevoir le code de vérification par :</p>
+<div id="choix">
+  <button type="button" id="ch-mail" class="on">✉ E-mail</button>
+  <button type="button" id="ch-wa">WhatsApp</button>
+</div>
+<div id="wabox">
+  <label>Numéro WhatsApp</label>
+  <input type="tel" id="watel" placeholder="Avec l’indicatif, ex. 237…" inputmode="tel" autocomplete="tel">
+</div>
+</div>
+<style>
+.chl{margin:4px 0 8px;font-size:.9rem;color:#c4c4c4}
+#choix{display:flex;gap:8px;margin:0 0 12px}
+#choix button{flex:1;padding:10px 12px;font-size:.9rem;font-weight:600;color:#c4c4c4;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);border-radius:999px;cursor:pointer}
+#choix button.on{color:#111;background:linear-gradient(135deg,#f0d36e,#d4af37);border-color:transparent}
+#wabox{display:none}
+#f.wa #wabox{display:block}
+</style>
+<script>
+(function(){
+  var f=document.getElementById('f'),nb=document.getElementById('nomBox'),cb=document.getElementById('choixbox');
+  var m=document.getElementById('ch-mail'),w=document.getElementById('ch-wa'),tel=document.getElementById('watel');
+  function refresh(){
+    var reg=nb&&nb.style.display!=='none';
+    cb.style.display=reg?'block':'none';
+    var wa=reg&&w.classList.contains('on');
+    f.classList.toggle('wa',wa);
+    tel.required=wa;
+  }
+  m.onclick=function(){m.classList.add('on');w.classList.remove('on');refresh();};
+  w.onclick=function(){w.classList.add('on');m.classList.remove('on');refresh();};
+  document.addEventListener('click',function(){setTimeout(refresh,0);},true);
+  refresh();
+  var of=window.fetch;
+  window.fetch=function(u,o){
+    try{
+      if(String(u).indexOf('/api/register')>-1&&o&&typeof o.body==='string'&&f.classList.contains('wa')){
+        var d=JSON.parse(o.body);d.telephone=tel.value;
+        o=Object.assign({},o,{body:JSON.stringify(d)});
+      }
+    }catch(e){}
+    return of.call(this,u,o);
+  };
+})();
+</script>
+
+    <div id="nomBox" style="display:none"><label>Nom d'artiste</label><input id="nom" autocomplete="name"></div>
+    <label>E-mail</label><input id="email" type="email" required autocomplete="email">
+    <label>Mot de passe (8 caractères minimum)</label>
+    <input id="pw" type="password" required minlength="8" autocomplete="current-password">
+    <button class="btn" id="go">Se connecter</button>
+  </form>
+  <a class="l" href="#" id="oubli">Mot de passe oublié ?</a>
+</div>
+
+<div id="v-code" class="v">
+  <h2>Vérifie ton e-mail</h2>
+  <p class="s">Entre le code à 6 chiffres envoyé à <b id="mailc"></b>.</p>
+  <form id="fc"><input id="code" class="code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required>
+    <button class="btn">Valider</button></form>
+  <a class="l" href="#" id="renvoi">Renvoyer le code</a>
+  <a class="l" href="#" id="autre">Utiliser un autre compte</a>
+</div>
+
+<div id="v-2fa" class="v">
+  <h2>Double authentification</h2>
+  <p class="s">Entre le code de ton application d'authentification, ou un code de récupération.</p>
+  <form id="f2"><input id="code2" class="code" maxlength="12" autocomplete="one-time-code" required style="letter-spacing:2px;font-size:22px">
+    <button class="btn">Valider</button></form>
+  <a class="l" href="#" id="retour2">Retour</a>
+</div>
+
+<div id="v-oubli" class="v">
+  <h2>Mot de passe oublié</h2>
+  <form id="fo"><label>E-mail du compte</label><input id="oemail" type="email" required>
+    <button class="btn">Recevoir un code</button></form>
+  <form id="fr" style="display:none">
+    <label>Code reçu par e-mail</label><input id="rcode" class="code" inputmode="numeric" maxlength="6" required>
+    <label>Nouveau mot de passe</label><input id="rpw" type="password" minlength="8" required autocomplete="new-password">
+    <div id="r2" style="display:none"><label>Code de double authentification</label><input id="rc2" maxlength="12"></div>
+    <button class="btn">Changer le mot de passe</button>
+  </form>
+  <a class="l" href="#" id="retour3">Retour à la connexion</a>
+</div>
+
+<p id="msg"></p>
+<script>
+const $ = s => document.querySelector(s);
+let mode = 'login', ticket = '', mailVu = '';
+const msg = (t, ok) => { $('#msg').textContent = t || ''; $('#msg').className = ok ? 'ok' : ''; };
+const vue = n => { document.querySelectorAll('.v').forEach(v => v.classList.toggle('on', v.id === 'v-' + n)); msg(''); };
+async function api(url, body) {
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    return await r.json();
+  } catch (e) { return { ok: false, erreur: 'Serveur injoignable' }; }
+}
+function setMode(m) {
+  mode = m;
+  $('#tl').classList.toggle('on', m === 'login'); $('#tr').classList.toggle('on', m === 'register');
+  $('#nomBox').style.display = m === 'register' ? 'block' : 'none';
+  $('#nom').required = m === 'register';
+  $('#pw').autocomplete = m === 'register' ? 'new-password' : 'current-password';
+  $('#go').textContent = m === 'register' ? 'Créer mon compte' : 'Se connecter';
+  msg('');
+}
+$('#tl').onclick = () => setMode('login');
+$('#tr').onclick = () => setMode('register');
+function etapeCode(email) { mailVu = email || mailVu; $('#mailc').textContent = mailVu; vue('code'); $('#code').focus(); }
+
+$('#f').onsubmit = async e => {
+  e.preventDefault(); msg('...');
+  const d = await api('/api/' + mode, { nom: $('#nom').value, email: $('#email').value, password: $('#pw').value });
+  if (!d.ok) return msg(d.erreur || 'Erreur');
+  if (d.etape === '2fa') { ticket = d.ticket; vue('2fa'); $('#code2').focus(); return; }
+  if (d.verifie === false) { if (mode === 'login') await api('/api/renvoyer-code'); return etapeCode($('#email').value); }
+  location.href = '/';
+};
+$('#fc').onsubmit = async e => {
+  e.preventDefault();
+  const d = await api('/api/verifier', { code: $('#code').value });
+  if (d.ok) location.href = '/'; else msg(d.erreur || 'Code incorrect');
+};
+$('#renvoi').onclick = async e => { e.preventDefault(); const d = await api('/api/renvoyer-code'); msg(d.message || d.erreur, d.ok); };
+$('#autre').onclick = async e => { e.preventDefault(); await api('/api/logout'); vue('auth'); };
+$('#f2').onsubmit = async e => {
+  e.preventDefault();
+  const d = await api('/api/login/2fa', { ticket, code: $('#code2').value });
+  if (!d.ok) { msg(d.erreur || 'Code incorrect'); if (/expir|essais/.test(d.erreur || '')) vue('auth'); return; }
+  if (d.verifie === false) return etapeCode($('#email').value);
+  location.href = '/';
+};
+$('#retour2').onclick = e => { e.preventDefault(); vue('auth'); };
+$('#oubli').onclick = e => { e.preventDefault(); $('#oemail').value = $('#email').value; vue('oubli'); };
+$('#retour3').onclick = e => { e.preventDefault(); vue('auth'); };
+$('#fo').onsubmit = async e => {
+  e.preventDefault();
+  const d = await api('/api/mdp-oublie', { email: $('#oemail').value });
+  msg(d.message || d.erreur, d.ok);
+  if (d.ok) { $('#fo').style.display = 'none'; $('#fr').style.display = 'block'; }
+};
+$('#fr').onsubmit = async e => {
+  e.preventDefault();
+  const d = await api('/api/mdp-reset', { email: $('#oemail').value, code: $('#rcode').value, nouveau: $('#rpw').value, code2fa: $('#rc2').value });
+  if (d.ok) { $('#fr').reset(); $('#fo').style.display = 'block'; $('#fr').style.display = 'none'; vue('auth'); msg('Mot de passe changé, connecte-toi', true); return; }
+  if (d.besoin2fa) $('#r2').style.display = 'block';
+  msg(d.erreur || 'Erreur');
+};
+fetch('/api/statut').then(r => r.json()).then(d => {
+  if (d.connecte && d.verifie) location.href = '/';
+  else if (d.connecte) etapeCode(d.email);
+}).catch(() => {});
+</script>
+</html>

@@ -1,0 +1,7 @@
+config.env
+*.db
+uploads/
+backups/
+*.log
+node_modules/
+*.avant-*

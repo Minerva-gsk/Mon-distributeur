@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="fr">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connexion</title>
+<style>
+:root{--hi:#2a2a2a;--mut:#b3b3b3}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:linear-gradient(#3a2f10,#0b0b0b 320px) no-repeat,#0b0b0b;color:#fff;font-family:system-ui,sans-serif;padding:24px 16px}
+h1{font-family:Georgia,serif;color:#f0d77a;letter-spacing:1px;margin:12px 0 4px}
+p.s{color:var(--mut);margin:0 0 20px}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tabs button{flex:1;font:inherit;padding:12px;border-radius:30px;border:1px solid #5a4a1a;background:transparent;color:var(--mut)}
+.tabs button.on{background:linear-gradient(135deg,#f5d77a,#d4af37 50%,#9c7a1c);color:#000;font-weight:700;border:0}
+label{display:block;margin-top:12px;color:var(--mut);font-size:13px}
+input{font:inherit;width:100%;padding:12px;margin-top:4px;border-radius:8px;border:0;background:var(--hi);color:#fff}
+.btn{font:inherit;background:linear-gradient(135deg,#f5d77a,#d4af37 50%,#9c7a1c);color:#000;border:0;padding:14px;border-radius:30px;font-weight:700;width:100%;margin-top:20px}
+#msg{color:#ff8a8a;min-height:20px;margin-top:12px}
+</style>
+<h1>Distributeur Musique</h1>
+<p class="s">Distribue ta musique sur les plateformes</p>
+<div class="tabs">
+  <button id="tl" class="on" type="button">Connexion</button>
+  <button id="tr" type="button">Créer un compte</button>
+</div>
+<form id="f">
+  <div id="nomBox" style="display:none">
+    <label>Nom d'artiste</label>
+    <input id="nom" autocomplete="name">
+  </div>
+  <label>E-mail</label>
+  <input id="email" type="email" required autocomplete="email">
+  <label>Mot de passe (8 caractères minimum)</label>
+  <input id="pw" type="password" required minlength="8" autocomplete="current-password">
+  <button class="btn" id="go">Se connecter</button>
+</form>
+<p id="msg"></p>
+<script>
+const $ = s => document.querySelector(s);
+let mode = 'login';
+function setMode(m) {
+  mode = m;
+  $('#tl').classList.toggle('on', m === 'login');
+  $('#tr').classList.toggle('on', m === 'register');
+  $('#nomBox').style.display = m === 'register' ? 'block' : 'none';
+  $('#nom').required = m === 'register';
+  $('#go').textContent = m === 'register' ? 'Créer mon compte' : 'Se connecter';
+  $('#msg').textContent = '';
+}
+$('#tl').onclick = () => setMode('login');
+$('#tr').onclick = () => setMode('register');
+$('#f').onsubmit = async e => {
+  e.preventDefault();
+  $('#msg').textContent = '...';
+  try {
+    const r = await fetch('/api/' + mode, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nom: $('#nom').value, email: $('#email').value, password: $('#pw').value })
+    });
+    const d = await r.json();
+    if (d.ok) location.href = '/';
+    else $('#msg').textContent = d.erreur || 'Erreur';
+  } catch (err) { $('#msg').textContent = 'Erreur réseau'; }
+};
+fetch('/api/me').then(r => r.json()).then(d => { if (d.ok) location.href = '/'; });
+</script>
+</html>

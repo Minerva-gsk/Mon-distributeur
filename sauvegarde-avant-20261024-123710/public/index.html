@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="fr">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Distributeur Musique</title>
+<style>
+:root{--bg:#0b0b0b;--card:#1e1e1e;--hi:#2a2a2a;--mut:#b3b3b3;--acc:#d4af37}
+*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(#3a2f10,#0b0b0b 300px) no-repeat,#0b0b0b;color:#fff;font-family:system-ui,sans-serif;padding-bottom:80px}
+header{padding:20px 16px 4px;font-size:22px;font-weight:700}
+section{display:none;padding:12px 16px}
+section.on{display:block}
+label{display:block;margin-top:12px;color:var(--mut);font-size:13px}
+input,select{font:inherit;width:100%;padding:12px;margin-top:4px;border-radius:8px;border:0;background:var(--hi);color:#fff}
+input[type=checkbox]{width:auto;margin:0 8px 0 0}
+.chk{display:flex;align-items:center;margin-top:8px;color:#fff;font-size:15px}
+.btn{font:inherit;background:var(--acc);color:#000;border:0;padding:14px;border-radius:30px;font-weight:700;width:100%;margin-top:20px}
+.rel{display:flex;gap:12px;background:var(--card);border-radius:12px;padding:12px;margin-bottom:12px}
+.rel img{width:84px;height:84px;border-radius:8px;object-fit:cover;background:var(--hi)}
+.rel .i{flex:1;min-width:0}
+.rel small{color:var(--mut);display:block;margin-top:2px}
+.rel audio{width:100%;margin-top:8px;height:34px}
+.badge{display:inline-block;background:#3a3a1a;color:#ffd24a;border-radius:20px;padding:2px 10px;font-size:12px;margin-top:6px}
+.plans{display:grid;gap:12px}
+.plan{background:var(--card);border-radius:12px;padding:16px}
+.plan.best{border:2px solid var(--acc)}
+.plan h3{margin:0 0 4px}
+.price{font-size:24px;font-weight:700;color:var(--acc)}
+.plan ul{padding-left:18px;color:var(--mut)}
+.note{color:var(--mut);font-size:13px;margin-top:14px}
+nav{position:fixed;left:0;right:0;bottom:0;height:56px;background:#000;display:flex}
+nav a{flex:1;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:14px}
+nav a.on{color:#fff;font-weight:700}
+.btn{background:linear-gradient(135deg,#f5d77a,#d4af37 50%,#9c7a1c)}header{font-family:Georgia,serif;letter-spacing:1px;color:#f0d77a}.plan.best{box-shadow:0 0 18px rgba(212,175,55,.25)}nav a.on{color:#f0d77a}
+.jc{background:var(--card);border-radius:12px;padding:12px;margin-bottom:14px}
+.jh{display:flex;gap:12px;align-items:center}
+.jh img{width:72px;height:72px;border-radius:8px;object-fit:cover;background:var(--hi)}
+.jh .i{flex:1;min-width:0}
+.jh small{display:block;color:var(--mut);margin-top:2px}
+.jc audio{width:100%;margin-top:10px;height:34px}
+.ja{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px}
+.ja button{font:inherit;background:var(--hi);color:#fff;border:0;border-radius:20px;padding:8px 14px}
+.ja button.on{background:var(--acc);color:#000}
+.ja button:disabled{opacity:.5}
+.st{font-size:24px;color:#555;padding:0 1px}
+.st.on{color:var(--acc)}
+.st.me{opacity:.6}
+.cbox{margin-top:10px;border-top:1px solid var(--hi);padding-top:8px}
+.cmt{padding:6px 0;font-size:14px;color:#ddd;word-break:break-word}
+.cmt b{color:#f0d77a}
+.cbox form{display:flex;gap:8px;margin-top:8px}
+.cbox form input{margin:0;flex:1}
+.cbox form .btn{width:auto;margin:0;padding:10px 16px}
+nav a{font-size:13px;text-align:center}
+.jb{font:inherit;background:var(--hi);color:#fff;border:1px solid var(--acc);border-radius:20px;padding:8px 14px;margin-top:8px;display:block}
+.jb.on{background:var(--acc);color:#000}
+#av{position:fixed;top:14px;right:14px;z-index:30;width:42px;height:42px;border-radius:50%;border:2px solid rgba(255,255,255,.15);font:inherit;font-size:17px;font-weight:700;color:#000;background:linear-gradient(135deg,#f5d77a,#d4af37 50%,#9c7a1c);box-shadow:0 4px 14px rgba(212,175,55,.35)}
+#vo{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.65);opacity:0;pointer-events:none;transition:opacity .25s;z-index:40}
+#volet{position:fixed;top:0;right:0;bottom:0;width:88vw;max-width:380px;background:linear-gradient(#1d1808,#121212 220px);border-left:1px solid #5a4a1a;z-index:50;padding:18px 16px 28px;overflow-y:auto;transform:translateX(105%);transition:transform .28s cubic-bezier(.2,.8,.2,1)}
+body.vopen{overflow:hidden}
+body.vopen #volet{transform:none}
+body.vopen #vo{opacity:1;pointer-events:auto}
+.vh{display:flex;justify-content:space-between;align-items:center;font-family:Georgia,serif;color:#f0d77a;font-size:20px;letter-spacing:.5px}
+.vx{background:none;border:0;color:#fff;font-size:20px;padding:6px}
+.vcard{display:flex;gap:14px;align-items:center;margin:18px 0 14px}
+.avg{flex:none;width:58px;height:58px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;color:#000;background:linear-gradient(135deg,#f5d77a,#d4af37 50%,#9c7a1c)}
+.vid{min-width:0}
+.vid b{display:block;font-size:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vid small{display:block;color:var(--mut);margin-top:2px;overflow:hidden;text-overflow:ellipsis}
+.vstats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:6px}
+.vstats div{background:var(--card);border:1px solid #2f2712;border-radius:12px;padding:10px 4px;text-align:center}
+.vstats b{display:block;font-size:18px;color:#f0d77a}
+.vstats small{color:var(--mut);font-size:11px}
+#volet h4{margin:22px 0 2px;color:#d4af37;font-size:12px;letter-spacing:1.5px;text-transform:uppercase}
+.pw{position:relative}
+.pw input{padding-right:46px}
+.eye{position:absolute;right:4px;top:calc(50% + 2px);transform:translateY(-50%);background:none;border:0;font-size:18px;padding:8px;color:#fff}
+.force{height:4px;background:var(--hi);border-radius:4px;margin-top:10px;overflow:hidden}
+.force i{display:block;height:100%;width:0;transition:width .25s,background .25s}
+#ft{display:block;min-height:16px;margin-top:4px;color:var(--mut);font-size:12px}
+.out{width:100%;margin-top:26px;font:inherit;background:transparent;border:1px solid #d4af37;color:#f0d77a;border-radius:30px;padding:13px;font-weight:700}
+#volet .btn:disabled{opacity:.6}
+#toast{position:fixed;left:50%;bottom:76px;transform:translate(-50%,20px);background:#1c1c1c;border:1px solid #d4af37;color:#f0d77a;padding:12px 18px;border-radius:30px;font-size:14px;opacity:0;pointer-events:none;transition:.25s;z-index:60;max-width:90vw;text-align:center}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+#toast.err{border-color:#e5736b;color:#ffb3ac}
+.liens{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.lien{font-size:12px;padding:6px 12px;border:1px solid #5a4a1a;border-radius:20px;color:#f0d77a;text-decoration:none;background:#1a1608}
+#fliens input{font-size:14px}
+</style>
+
+<header id="titre">Mes sorties</header>
+
+<section id="home" class="on"><div id="list"></div></section>
+
+<section id="add">
+  <form id="f">
+    <label>Titre du morceau</label>
+    <input name="titre" required>
+    <label>Nom de l'artiste</label>
+    <input name="artiste" required>
+    <label>Genre</label>
+    <select name="genre">
+      <option>Afrobeats</option><option>Makossa</option><option>Bikutsi</option>
+      <option>Hip-hop / Rap</option><option>Gospel</option><option>R&amp;B</option>
+      <option>Coupé-décalé</option><option>Pop</option><option>Autre</option>
+    </select>
+    <label>Langue des paroles</label>
+    <select name="langue">
+      <option>Français</option><option>Anglais</option><option>Pidgin</option>
+      <option>Langue locale</option><option>Instrumental</option>
+    </select>
+    <label>Date de sortie souhaitée</label>
+    <input type="date" name="date_sortie" required>
+    <label>Code ISRC (facultatif, on peut le générer plus tard)</label>
+    <input name="isrc" placeholder="Ex : CM-XXX-26-00001">
+    <div class="chk"><input type="checkbox" name="explicite" id="exp"><label for="exp" style="margin:0;color:#fff;font-size:15px">Contenu explicite</label></div>
+
+    <label>Plateformes visées</label>
+    <div class="chk"><input type="checkbox" name="plateformes" value="Spotify" checked>Spotify</div>
+    <div class="chk"><input type="checkbox" name="plateformes" value="Apple Music" checked>Apple Music</div>
+    <div class="chk"><input type="checkbox" name="plateformes" value="Deezer" checked>Deezer</div>
+    <div class="chk"><input type="checkbox" name="plateformes" value="YouTube Music">YouTube Music</div>
+    <div class="chk"><input type="checkbox" name="plateformes" value="Boomplay">Boomplay</div>
+    <div class="chk"><input type="checkbox" name="plateformes" value="Audiomack">Audiomack</div>
+
+    <label>Fichier audio (WAV recommandé, mp3 accepté pour le test)</label>
+    <input type="file" name="audio" accept="audio/*" required>
+    <label>Pochette (carrée, 3000x3000 recommandé)</label>
+    <input type="file" name="pochette" accept="image/*" required>
+
+    <label>Offre choisie</label>
+    <select name="offre" id="offre"></select>
+
+    <button class="btn">Envoyer la sortie</button>
+  </form>
+  <p id="msg" style="color:var(--acc)"></p>
+</section>
+
+<section id="juger"><div id="jlist"></div></section>
+
+<section id="plans">
+  <div class="plans" id="plansList"></div>
+  <p class="note">Montants d'exemple, à modifier selon ton choix. Les revenus des plateformes sont reversés à l'artiste, moins ta commission si tu en prévois une.</p>
+  <p class="note">Ici, les sorties sont préparées et suivies. La livraison réelle vers Spotify et les autres passe par un distributeur partenaire.</p>
+</section>
+
+<button id="av" type="button" aria-label="Mon compte">?</button>
+<div id="vo" onclick="fermerCompte()"></div>
+<aside id="volet" role="dialog" aria-label="Mon compte">
+  <div class="vh"><span>Mon compte</span><button type="button" class="vx" onclick="fermerCompte()" aria-label="Fermer">✕</button></div>
+  <div class="vcard">
+    <div class="avg" id="avg">?</div>
+    <div class="vid"><b id="vnom"></b><small id="vmail"></small><small id="vdep"></small></div>
+  </div>
+  <div class="vstats">
+    <div><b id="s1">0</b><small>Sorties</small></div>
+    <div><b id="s2">0</b><small>Likes</small></div>
+    <div><b id="s3">0</b><small>Avis</small></div>
+    <div><b id="s4">-</b><small>Note</small></div>
+  </div>
+  <h4>Profil</h4>
+  <form id="fnom">
+    <label>Nom d'artiste</label>
+    <input id="nnom" required minlength="2" maxlength="60">
+    <button class="btn">Enregistrer le nom</button>
+  </form>
+  <h4>Sécurité</h4>
+  <form id="fpw">
+    <label>Mot de passe actuel</label>
+    <div class="pw"><input id="pw0" type="password" required autocomplete="current-password"><button type="button" class="eye" data-t="pw0" aria-label="Afficher">👁</button></div>
+    <label>Nouveau mot de passe (8 caractères minimum)</label>
+    <div class="pw"><input id="pw1" type="password" required minlength="8" autocomplete="new-password"><button type="button" class="eye" data-t="pw1" aria-label="Afficher">👁</button></div>
+    <div class="force"><i id="fb"></i></div>
+    <small id="ft"></small>
+    <button class="btn">Mettre à jour le mot de passe</button>
+  </form>
+  <h4>Mes plateformes</h4>
+  <form id="fliens"></form>
+  <a href="/securite.html" class="out" style="display:block;text-align:center;text-decoration:none;margin-top:14px">Sécurité et double authentification</a>
+  <button class="out" id="vout" type="button">Se déconnecter</button>
+</aside>
+<div id="toast"></div>
+<nav>
+  <a data-p="home" class="on">Mes sorties</a>
+  <a data-p="add">Nouvelle sortie</a>
+  <a data-p="juger">À juger</a>
+  <a data-p="plans">Tarifs</a>
+</nav>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const NOMS = { home: 'Mes sorties', add: 'Nouvelle sortie', plans: 'Tarifs', juger: 'À juger' };
+const PLANS = [
+  { nom: 'Single', prix: '3 000 FCFA', detail: 'par sortie',
+    items: ['1 titre', 'Livraison aux plateformes choisies', 'Pochette et métadonnées vérifiées'] },
+  { nom: 'Pack 3 sorties', prix: '8 000 FCFA', detail: 'paiement unique', best: true,
+    items: ['3 sorties à utiliser quand tu veux', 'Tarif réduit par rapport à 3 singles'] },
+  { nom: 'Illimité', prix: '23 000 FCFA', detail: 'par an',
+    items: ['Sorties illimitées pendant 1 an', 'Mise en avant sur le site'] }
+];
+
+function go(n) {
+  document.querySelectorAll('section').forEach(x => x.classList.toggle('on', x.id === n));
+  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', a.dataset.p === n));
+  $('#titre').textContent = NOMS[n];
+}
+document.querySelectorAll('nav a').forEach(a => a.onclick = () => go(a.dataset.p));
+
+$('#plansList').innerHTML = PLANS.map(p => `<div class="plan ${p.best ? 'best' : ''}">
+  <h3>${p.nom}</h3><div class="price">${p.prix}</div><small style="color:#b3b3b3">${p.detail}</small>
+  <ul>${p.items.map(i => `<li>${i}</li>`).join('')}</ul></div>`).join('');
+$('#offre').innerHTML = PLANS.map(p => `<option>${p.nom} - ${p.prix}</option>`).join('');
+
+async function load() {
+  const list = await (await fetch('/api/releases')).json();
+  $('#list').innerHTML = list.length ? list.map(r => `<div class="rel">
+    <img src="${esc(r.pochette)}" alt="">
+    <div class="i">
+      <b>${esc(r.titre)}</b>
+      <small>${esc(r.artiste)} · ${esc(r.genre)} · ${esc(r.langue)}</small>
+      <small>Sortie : ${esc(r.date_sortie)}${r.explicite ? ' · Explicite' : ''}</small>
+      <small>${esc(r.plateformes)}</small>
+      <span class="badge">${esc(r.statut)}</span>
+      <button class="jb ${r.a_juger ? 'on' : ''}" onclick="basculerJuger(${r.id}, this)">${r.a_juger ? '✓ À juger (retirer)' : 'Mettre à juger'}</button>
+      <audio controls preload="none" src="${esc(r.audio)}"></audio>
+    </div></div>`).join('')
+    : '<p style="color:#b3b3b3">Aucune sortie. Crée la première dans « Nouvelle sortie ».</p>';
+}
+
+$('#f').onsubmit = async e => {
+  e.preventDefault();
+  $('#msg').textContent = 'Envoi en cours...';
+  try {
+    const r = await fetch('/api/releases', { method: 'POST', body: new FormData($('#f')) });
+    const d = await r.json();
+    if (d.ok) { $('#f').reset(); $('#msg').textContent = ''; await load(); go('home'); }
+    else $('#msg').textContent = 'Échec : ' + (d.erreur || 'vérifie les fichiers');
+  } catch (err) { $('#msg').textContent = 'Erreur réseau'; }
+};
+document.querySelectorAll('.plan').forEach((el, i) => {
+  el.style.cursor = 'pointer';
+  el.insertAdjacentHTML('beforeend', '<button class="btn" type="button">Choisir cette offre</button>');
+  el.onclick = () => { $('#offre').selectedIndex = i; go('add'); window.scrollTo(0, 0); };
+});
+fetch('/api/me').then(r => r.json()).then(d => {
+  if (!d.ok) { location.href = '/connexion.html'; return; }
+  initCompte(d);
+  load();
+});
+async function api(url, body) {
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    return await r.json();
+  } catch (e) {
+    return { ok: false, erreur: 'Serveur injoignable : relance node server.js dans Termux' };
+  }
+}
+async function chargerJuger() {
+  let d = [];
+  try { d = await (await fetch('/api/juger')).json(); } catch (e) {}
+  const list = Array.isArray(d) ? d : [];
+  $('#jlist').innerHTML = list.length ? list.map(r => {
+    let st = '';
+    for (let i = 1; i <= 5; i++) {
+      st += '<span class="st' + (i <= (r.ma_note || 0) ? ' on' : '') + '' + '"' + ' onclick="noter(' + r.id + ',' + i + ')"' + '>★</span>';
+    }
+    return '<div class="jc"><div class="jh"><img src="' + esc(r.pochette) + '" alt="">'
+      + '<div class="i"><b>' + esc(r.titre) + '</b><small>' + esc(r.artiste) + ' · ' + esc(r.genre) + (r.mien ? ' · Ton morceau' : '') + '</small>'
+      + '<small id="moy' + r.id + '">' + (r.nb_notes ? '★ ' + Number(r.moyenne).toFixed(1) + ' (' + r.nb_notes + ')' : 'Pas encore noté') + '</small></div></div>'
+      + '<audio controls preload="none" src="' + esc(r.audio) + '"></audio>'
+      + liensHtml(r.liens)
+      + '<div class="ja"><button id="lk' + r.id + '" class="' + (r.aime ? 'on' : '') + '"' + ' onclick="aimer(' + r.id + ')"' + '>' + (r.aime ? '♥ ' : '♡ ') + r.likes + '</button>'
+      + '<span id="sts' + r.id + '">' + st + '</span>'
+      + '<button id="nc' + r.id + '" onclick="ouvrirCom(' + r.id + ')">💬 ' + r.nb_coms + '</button></div>'
+      + '<div class="cbox" id="c' + r.id + '" style="display:none"></div></div>';
+  }).join('') : '<p style="color:#b3b3b3">Aucun morceau à juger pour le moment.</p>';
+}
+async function aimer(id) {
+  const d = await api('/api/releases/' + id + '/like');
+  if (!d.ok) return alert(d.erreur || 'Erreur');
+  const b = $('#lk' + id);
+  b.className = d.aime ? 'on' : '';
+  b.textContent = (d.aime ? '♥ ' : '♡ ') + d.likes;
+}
+async function noter(id, n) {
+  const d = await api('/api/releases/' + id + '/note', { note: n });
+  if (!d.ok) return alert(d.erreur || 'Erreur');
+  document.querySelectorAll('#sts' + id + ' .st').forEach((el, i) => el.classList.toggle('on', i < d.ma_note));
+  $('#moy' + id).textContent = '★ ' + Number(d.moyenne).toFixed(1) + ' (' + d.nb_notes + ')';
+}
+async function ouvrirCom(id) {
+  const box = $('#c' + id);
+  if (box.style.display === 'block') { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  await chargerCom(id);
+}
+async function chargerCom(id) {
+  let list = [];
+  try { list = await (await fetch('/api/releases/' + id + '/comments')).json(); } catch (e) {}
+  if (!Array.isArray(list)) list = [];
+  $('#c' + id).innerHTML = list.map(c => '<div class="cmt"><b>' + esc(c.nom) + '</b> ' + esc(c.texte) + '</div>').join('')
+    + '<form onsubmit="envoyerCom(event,' + id + '); return false"><input placeholder="Ton commentaire..." maxlength="300" required><button class="btn">Publier</button></form>';
+}
+async function envoyerCom(e, id) {
+  e.preventDefault();
+  const inp = e.target.querySelector('input');
+  const d = await api('/api/releases/' + id + '/comments', { texte: inp.value });
+  if (!d.ok) return alert(d.erreur || 'Erreur');
+  $('#nc' + id).textContent = '💬 ' + d.nb_coms;
+  await chargerCom(id);
+}
+document.querySelectorAll('nav a').forEach(a => {
+  const old = a.onclick;
+  a.onclick = () => { old(); if (a.dataset.p === 'juger') chargerJuger(); };
+});
+async function basculerJuger(id, btn) {
+  const d = await api('/api/releases/' + id + '/juger');
+  if (!d.ok) return alert(d.erreur || 'Erreur');
+  btn.className = 'jb' + (d.a_juger ? ' on' : '');
+  btn.textContent = d.a_juger ? '✓ À juger (retirer)' : 'Mettre à juger';
+}
+const ini = n => (Array.from(String(n || '').trim())[0] || '?').toUpperCase();
+let moi = null, tt;
+function toast(msg, err) {
+  const el = $('#toast');
+  el.textContent = msg;
+  el.className = 'show' + (err ? ' err' : '');
+  clearTimeout(tt);
+  tt = setTimeout(() => { el.className = ''; }, 3200);
+}
+window.alert = m => toast(String(m), true);
+async function postJ(url, body) {
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    return await r.json();
+  } catch (e) { return { ok: false, erreur: 'Serveur injoignable' }; }
+}
+function initCompte(d) {
+  moi = d;
+  $('#av').textContent = ini(d.nom);
+  $('#av').onclick = ouvrirCompte;
+}
+async function ouvrirCompte() {
+  $('#avg').textContent = ini(moi.nom);
+  $('#vnom').textContent = moi.nom;
+  $('#vmail').textContent = moi.email || '';
+  const dt = new Date(String(moi.depuis || '').replace(' ', 'T') + 'Z');
+  $('#vdep').textContent = isNaN(dt) ? '' : 'Membre depuis ' + dt.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+  $('#nnom').value = moi.nom;
+  document.body.classList.add('vopen');
+  try {
+    const s = await (await fetch('/api/compte/stats')).json();
+    if (s.ok) {
+      $('#s1').textContent = s.sorties;
+      $('#s2').textContent = s.likes;
+      $('#s3').textContent = s.commentaires;
+      $('#s4').textContent = s.moyenne ? Number(s.moyenne).toFixed(1) : '-';
+    }
+  } catch (e) {}
+}
+function fermerCompte() { document.body.classList.remove('vopen'); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') fermerCompte(); });
+function majForce() {
+  const p = $('#pw1').value;
+  const cols = ['#e5736b', '#e5736b', '#e0a93b', '#9ccc65', '#4caf50'];
+  const txt = ['Trop court', 'Faible', 'Moyen', 'Bon', 'Excellent'];
+  if (!p) { $('#fb').style.width = '0'; $('#ft').textContent = ''; return; }
+  let n = 0;
+  if (p.length >= 8) n++;
+  if (p.length >= 12) n++;
+  if (/[A-Z]/.test(p) && /[a-z]/.test(p)) n++;
+  if (/\d/.test(p)) n++;
+  if (/[^A-Za-z0-9]/.test(p)) n++;
+  n = p.length < 8 ? 0 : Math.min(n, 4);
+  $('#fb').style.width = Math.max(n, 1) * 25 + '%';
+  $('#fb').style.background = cols[n];
+  $('#ft').textContent = txt[n];
+}
+$('#pw1').oninput = majForce;
+document.querySelectorAll('.eye').forEach(b => b.onclick = () => {
+  const i = $('#' + b.dataset.t);
+  i.type = i.type === 'password' ? 'text' : 'password';
+});
+$('#fnom').onsubmit = async e => {
+  e.preventDefault();
+  const b = e.target.querySelector('.btn');
+  b.disabled = true;
+  const d = await postJ('/api/compte/nom', { nom: $('#nnom').value });
+  b.disabled = false;
+  if (!d.ok) return toast(d.erreur || 'Erreur', true);
+  moi.nom = d.nom;
+  $('#av').textContent = ini(d.nom);
+  $('#avg').textContent = ini(d.nom);
+  $('#vnom').textContent = d.nom;
+  toast('Nom mis à jour ✓');
+};
+$('#fpw').onsubmit = async e => {
+  e.preventDefault();
+  const b = e.target.querySelector('.btn');
+  b.disabled = true;
+  const d = await postJ('/api/compte/mot-de-passe', { actuel: $('#pw0').value, nouveau: $('#pw1').value });
+  b.disabled = false;
+  if (!d.ok) return toast(d.erreur || 'Erreur', true);
+  $('#fpw').reset();
+  majForce();
+  toast('Mot de passe mis à jour ✓');
+};
+$('#vout').onclick = async () => {
+  await postJ('/api/logout');
+  location.href = '/connexion.html';
+};
+const PLATS = [
+  ['spotify', 'Spotify'], ['apple', 'Apple Music'], ['deezer', 'Deezer'],
+  ['youtube', 'YouTube'], ['boomplay', 'Boomplay'], ['audiomack', 'Audiomack'],
+  ['tiktok', 'TikTok'], ['instagram', 'Instagram']
+];
+function liensHtml(l) {
+  l = l || {};
+  const h = PLATS.filter(p => l[p[0]]).map(p =>
+    '<a class="lien" target="_blank" rel="noopener noreferrer" href="' + esc(l[p[0]]) + '">' + p[1] + '</a>').join('');
+  return h ? '<div class="liens">' + h + '</div>' : '';
+}
+$('#fliens').innerHTML = PLATS.map(p =>
+  '<label>' + p[1] + '</label><input id="l_' + p[0] + '" type="url" inputmode="url" maxlength="300" placeholder="https://...">').join('')
+  + '<button class="btn">Enregistrer mes liens</button>';
+async function chargerLiens() {
+  try {
+    const d = await (await fetch('/api/compte/liens')).json();
+    if (d.ok) PLATS.forEach(p => { $('#l_' + p[0]).value = (d.liens || {})[p[0]] || ''; });
+  } catch (e) {}
+}
+$('#av').addEventListener('click', chargerLiens);
+$('#fliens').onsubmit = async e => {
+  e.preventDefault();
+  const b = e.target.querySelector('.btn');
+  b.disabled = true;
+  const liens = {};
+  PLATS.forEach(p => { liens[p[0]] = $('#l_' + p[0]).value.trim(); });
+  const d = await postJ('/api/compte/liens', { liens });
+  b.disabled = false;
+  if (!d.ok) return toast(d.erreur || 'Erreur', true);
+  toast('Liens enregistrés ✓');
+};
+</script>
+</html>

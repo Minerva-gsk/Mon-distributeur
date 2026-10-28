@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="fr">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sécurité</title>
+<style>
+:root{--hi:#2a2a2a;--mut:#b3b3b3}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:linear-gradient(#3a2f10,#0b0b0b 320px) no-repeat,#0b0b0b;color:#fff;font-family:system-ui,sans-serif;padding:20px 16px 60px}
+h1{font-family:Georgia,serif;color:#f0d77a;margin:6px 0 4px}
+.back{color:#f0d77a;font-size:14px;text-decoration:none}
+.card{background:#1e1e1e;border:1px solid #2f2712;border-radius:14px;padding:16px;margin-top:16px}
+.card h3{margin:0 0 6px;color:#f0d77a}
+.mut{color:var(--mut);font-size:14px}
+.pill{display:inline-block;padding:3px 12px;border-radius:20px;font-size:12px;font-weight:700}
+.on{background:#1f3a1f;color:#9ccc65}.off{background:#3a2a1a;color:#e0a93b}
+label{display:block;margin-top:12px;color:var(--mut);font-size:13px}
+input{font:inherit;width:100%;padding:12px;margin-top:4px;border-radius:8px;border:0;background:var(--hi);color:#fff}
+.btn{font:inherit;background:linear-gradient(135deg,#f5d77a,#d4af37 50%,#9c7a1c);color:#000;border:0;padding:13px;border-radius:30px;font-weight:700;width:100%;margin-top:16px;display:block;text-align:center;text-decoration:none}
+.btn.o{background:transparent;border:1px solid #d4af37;color:#f0d77a}
+.sec{font-family:monospace;font-size:18px;letter-spacing:2px;background:#111;padding:12px;border-radius:8px;word-break:break-all;margin-top:10px;user-select:all}
+.codes{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;font-family:monospace}
+.codes div{background:#111;padding:8px;border-radius:8px;text-align:center;user-select:all}
+.ev{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid #2a2a2a;font-size:13px}
+#msg{margin-top:14px;min-height:20px;color:#ff8a8a}#msg.ok{color:#9ccc65}
+.h{display:none}
+</style>
+<a class="back" href="/">← Retour</a>
+<h1>Sécurité</h1>
+<p class="mut">Protège ton compte et tes sorties.</p>
+
+<div class="card">
+  <h3>Double authentification <span id="etat" class="pill off">...</span></h3>
+  <p class="mut">À chaque connexion, un code à 6 chiffres de ton application (Google Authenticator, Microsoft Authenticator, Aegis...) est demandé en plus du mot de passe.</p>
+  <div id="off" class="h">
+    <button class="btn" id="b-prep" type="button">Activer</button>
+    <div id="etape" class="h">
+      <p class="mut">1. Ouvre ton application d'authentification et ajoute un compte avec cette clé (ou touche le bouton si elle est sur ce téléphone) :</p>
+      <div class="sec" id="secret"></div>
+      <a class="btn o" id="lien" href="#">Ouvrir mon application</a>
+      <label>2. Entre le code à 6 chiffres affiché</label>
+      <input id="c1" inputmode="numeric" maxlength="7" autocomplete="one-time-code">
+      <button class="btn" id="b-act" type="button">Confirmer</button>
+    </div>
+  </div>
+  <div id="recup" class="h">
+    <p><b>Garde ces codes de récupération.</b> Chacun ne sert qu'une fois si tu perds ton téléphone. Ils ne seront plus affichés.</p>
+    <div class="codes" id="codes"></div>
+  </div>
+  <div id="on" class="h">
+    <p class="mut">Codes de récupération restants : <b id="rest">0</b></p>
+    <label>Mot de passe</label><input id="dpw" type="password" autocomplete="current-password">
+    <label>Code à 6 chiffres (ou code de récupération)</label><input id="dc" maxlength="12">
+    <button class="btn o" id="b-des" type="button">Désactiver</button>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Appareils connectés</h3>
+  <p class="mut">Si tu as un doute, déconnecte tous les appareils, y compris celui-ci.</p>
+  <button class="btn o" id="b-tout" type="button">Tout déconnecter</button>
+</div>
+
+<div class="card">
+  <h3>Activité récente</h3>
+  <div id="act" class="mut">...</div>
+</div>
+<p id="msg"></p>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const msg = (t, ok) => { $('#msg').textContent = t || ''; $('#msg').className = ok ? 'ok' : ''; };
+async function api(url, body) {
+  try {
+    const r = await fetch(url, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (r.status === 401 || r.status === 403) { location.href = '/connexion.html'; return { ok: false }; }
+    return await r.json();
+  } catch (e) { return { ok: false, erreur: 'Serveur injoignable' }; }
+}
+async function statut() {
+  const d = await api('/api/2fa/statut');
+  if (!d.ok) return;
+  $('#etat').textContent = d.actif ? 'Activée' : 'Désactivée';
+  $('#etat').className = 'pill ' + (d.actif ? 'on' : 'off');
+  $('#off').classList.toggle('h', d.actif);
+  $('#on').classList.toggle('h', !d.actif);
+  $('#rest').textContent = d.codes_restants;
+}
+async function activite() {
+  const d = await api('/api/compte/activite');
+  if (!d.ok) return;
+  $('#act').innerHTML = d.evenements.length ? d.evenements.map(e =>
+    '<div class="ev"><span>' + esc(e.evenement) + '</span><span>' + esc(e.date) + ' UTC</span></div>').join('') : 'Rien pour le moment';
+}
+$('#b-prep').onclick = async () => {
+  const d = await api('/api/2fa/preparer', {});
+  if (!d.ok) return msg(d.erreur || 'Erreur');
+  $('#secret').textContent = d.secret; $('#lien').href = d.uri; $('#etape').classList.remove('h'); $('#b-prep').classList.add('h'); msg('');
+};
+$('#b-act').onclick = async () => {
+  const d = await api('/api/2fa/activer', { code: $('#c1').value });
+  if (!d.ok) return msg(d.erreur || 'Code incorrect');
+  $('#codes').innerHTML = d.codes.map(c => '<div>' + esc(c) + '</div>').join('');
+  $('#recup').classList.remove('h'); $('#off').classList.add('h'); msg('Double authentification activée', true);
+  $('#etat').textContent = 'Activée'; $('#etat').className = 'pill on'; activite();
+};
+$('#b-des').onclick = async () => {
+  const d = await api('/api/2fa/desactiver', { password: $('#dpw').value, code: $('#dc').value });
+  if (!d.ok) return msg(d.erreur || 'Erreur');
+  $('#dpw').value = ''; $('#dc').value = ''; $('#recup').classList.add('h'); msg('Double authentification désactivée', true);
+  $('#b-prep').classList.remove('h'); $('#etape').classList.add('h'); statut(); activite();
+};
+$('#b-tout').onclick = async () => {
+  if (!confirm('Déconnecter tous les appareils ?')) return;
+  const d = await api('/api/logout-tout', {});
+  if (d.ok) location.href = '/connexion.html';
+};
+statut(); activite();
+</script>
+</html>

@@ -1,0 +1,719 @@
+'use strict';
+const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const { promisify } = require('util');
+const rateLimit = require('express-rate-limit');
+const { DatabaseSync } = require('node:sqlite');
+const S = require('./secu');
+
+process.on('unhandledRejection', e => console.error('Erreur non gérée :', e));
+process.on('uncaughtException', e => console.error('Exception :', e));
+
+/* ---------- Configuration (fichier config.env facultatif) ---------- */
+try {
+  for (const l of fs.readFileSync('config.env', 'utf8').split('\n')) {
+    const m = l.match(/^\s*([A-Z_]+)\s*=\s*(.*?)\s*$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+} catch (e) {}
+const PORT = Number(process.env.PORT) || 3000;
+const CLE = S.chargerCle();
+fs.mkdirSync('uploads', { recursive: true });
+fs.mkdirSync('backups', { recursive: true });
+
+/* ---------- E-mail (Gmail ou autre SMTP ; sinon le code s'affiche dans serveur.log) ---------- */
+let transport = null;
+if (process.env.SMTP_USER && process.env.SMTP_PASS) {
+  try {
+    transport = require('nodemailer').createTransport({
+      host: process.env.SMTP_HOST || 'smtp.gmail.com', port: Number(process.env.SMTP_PORT) || 465,
+      secure: (Number(process.env.SMTP_PORT) || 465) === 465,
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+    });
+  } catch (e) { console.error('nodemailer absent : npm install nodemailer'); }
+}
+async function envoyerMail(to, sujet, texte) {
+  if (!transport) {
+    console.log('[E-MAIL NON CONFIGURÉ] à ' + to + ' | ' + sujet + ' | ' + texte);
+    return false;
+  }
+  try {
+    await transport.sendMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER, to, subject: sujet, text: texte });
+    return true;
+  } catch (e) { console.error('Envoi e-mail échoué :', e.message); return false; }
+}
+
+/* ---------- Base de données ---------- */
+const db = new DatabaseSync('musique.db');
+db.exec(`
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  nom TEXT, email TEXT UNIQUE, salt TEXT, hash TEXT, liens TEXT,
+  cree TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS sessions (
+  token TEXT PRIMARY KEY, user_id INTEGER,
+  cree TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS releases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  titre TEXT, artiste TEXT, genre TEXT, langue TEXT,
+  date_sortie TEXT, isrc TEXT, explicite INTEGER DEFAULT 0,
+  plateformes TEXT, offre TEXT, audio TEXT, pochette TEXT,
+  statut TEXT DEFAULT 'En attente',
+  user_id INTEGER, a_juger INTEGER DEFAULT 0,
+  cree TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS likes (user_id INTEGER, release_id INTEGER, PRIMARY KEY (user_id, release_id));
+CREATE TABLE IF NOT EXISTS ratings (user_id INTEGER, release_id INTEGER, note INTEGER, PRIMARY KEY (user_id, release_id));
+CREATE TABLE IF NOT EXISTS comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  release_id INTEGER, user_id INTEGER, texte TEXT,
+  cree TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS journal (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  date TEXT DEFAULT CURRENT_TIMESTAMP, user_id INTEGER, evenement TEXT, ip TEXT);
+`);
+for (const sql of [
+  'ALTER TABLE releases ADD COLUMN user_id INTEGER',
+  'ALTER TABLE releases ADD COLUMN a_juger INTEGER DEFAULT 0',
+  'ALTER TABLE users ADD COLUMN liens TEXT',
+  'ALTER TABLE users ADD COLUMN code_hash TEXT',
+  'ALTER TABLE users ADD COLUMN code_exp INTEGER',
+  'ALTER TABLE users ADD COLUMN code_essais INTEGER DEFAULT 0',
+  'ALTER TABLE users ADD COLUMN reset_hash TEXT',
+  'ALTER TABLE users ADD COLUMN reset_exp INTEGER',
+  'ALTER TABLE users ADD COLUMN reset_essais INTEGER DEFAULT 0',
+  'ALTER TABLE users ADD COLUMN totp TEXT',
+  'ALTER TABLE users ADD COLUMN totp_actif INTEGER DEFAULT 0',
+  'ALTER TABLE users ADD COLUMN recup TEXT'
+]) { try { db.exec(sql); } catch (e) {} }
+/* Les comptes créés avant la vérification e-mail sont considérés comme vérifiés (une seule fois) */
+try {
+  db.exec('ALTER TABLE users ADD COLUMN verifie INTEGER DEFAULT 0');
+  db.exec('UPDATE users SET verifie = 1');
+} catch (e) {}
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_releases_user ON releases(user_id);
+CREATE INDEX IF NOT EXISTS idx_comments_release ON comments(release_id);
+`);
+
+const purge = () => {
+  try {
+    db.exec("DELETE FROM sessions WHERE cree < datetime('now','-30 days')");
+    db.exec("DELETE FROM journal WHERE date < datetime('now','-180 days')");
+  } catch (e) {}
+};
+purge();
+setInterval(purge, 3600000).unref();
+
+/* Sauvegardes automatiques : au démarrage puis toutes les 6 h, 14 copies conservées */
+function sauvegarder() {
+  try {
+    const d = new Date().toISOString().slice(0, 13).replace('T', '-');
+    const f = path.join('backups', 'musique-' + d + 'h.db');
+    if (!fs.existsSync(f)) {
+      db.exec("VACUUM INTO '" + f.replace(/'/g, "''") + "'");
+      try { fs.chmodSync(f, 0o600); } catch (e) {}
+    }
+    const vieux = fs.readdirSync('backups').filter(x => /^musique-.*\.db$/.test(x)).sort().slice(0, -14);
+    vieux.forEach(x => fs.unlinkSync(path.join('backups', x)));
+  } catch (e) { console.error('Sauvegarde échouée :', e.message); }
+}
+sauvegarder();
+setInterval(sauvegarder, 6 * 3600000).unref();
+
+/* ---------- Outils ---------- */
+const CTRL = /[\u0000-\u001f\u007f]/g;
+const clean = (v, max = 200) => String(v == null ? '' : v).replace(CTRL, '').trim().slice(0, max);
+const bad = (res, m, code = 400, extra = {}) => res.status(code).json({ ok: false, erreur: m, ...extra });
+const sha = t => crypto.createHash('sha256').update(t).digest('hex');
+const hmac = t => crypto.createHmac('sha256', CLE).update(t).digest('hex');
+const ah = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+const journaliser = (req, uid, evt) => {
+  try { db.prepare('INSERT INTO journal (user_id, evenement, ip) VALUES (?, ?, ?)').run(uid || null, evt, req.ip || ''); } catch (e) {}
+};
+
+/* Mots de passe : scrypt asynchrone (ne bloque plus le serveur) */
+const scrypt = promisify(crypto.scrypt);
+const hashPw = async (pw, salt) => (await scrypt(pw, salt, 64)).toString('hex');
+async function checkPw(pw, salt, hash) {
+  const a = await hashPw(pw, salt);
+  return S.egal(a, hash || '');
+}
+const DUMMY_SALT = crypto.randomBytes(16).toString('hex');
+let DUMMY_HASH = null;
+async function faussePw(pw) {
+  if (!DUMMY_HASH) DUMMY_HASH = await hashPw('dummy', DUMMY_SALT);
+  await checkPw(pw, DUMMY_SALT, DUMMY_HASH);
+  return false;
+}
+
+const FAIBLES = new Set(['12345678', '123456789', '1234567890', '87654321', 'password', 'password1',
+  'motdepasse', 'motdepasse1', 'azertyuiop', 'azerty123', 'qwertyuiop', 'qwerty123',
+  '11111111', '00000000', 'abcdefgh', 'iloveyou', 'musique123']);
+function verifMdp(pw, email) {
+  if (pw.length < 8 || pw.length > 100) return 'Mot de passe : 8 caractères minimum';
+  if (FAIBLES.has(pw.toLowerCase())) return 'Mot de passe trop courant, choisis-en un autre';
+  const loc = String(email || '').split('@')[0].toLowerCase();
+  if (loc.length >= 4 && pw.toLowerCase().includes(loc)) return 'Le mot de passe ne doit pas contenir ton e-mail';
+  return '';
+}
+
+/* Verrouillage par compte après trop d'échecs */
+const echecs = new Map();
+const FENETRE = 15 * 60 * 1000;
+const verrouille = k => { const f = echecs.get(k); return !!f && f.n >= 8 && Date.now() - f.t < FENETRE; };
+function echec(k) {
+  const now = Date.now();
+  if (echecs.size > 5000) echecs.clear();
+  const f = echecs.get(k);
+  if (!f || now - f.t > FENETRE) echecs.set(k, { n: 1, t: now });
+  else { f.n++; f.t = now; }
+}
+
+/* ---------- Codes par e-mail (vérification, mot de passe oublié) ---------- */
+const dernierEnvoi = new Map();
+async function emettreCode(user, type) {
+  const prev = dernierEnvoi.get(type + user.id) || 0;
+  if (Date.now() - prev < 45000) return false;
+  dernierEnvoi.set(type + user.id, Date.now());
+  if (dernierEnvoi.size > 5000) dernierEnvoi.clear();
+  const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  db.prepare('UPDATE users SET ' + type + '_hash = ?, ' + type + '_exp = ?, ' + type + '_essais = 0 WHERE id = ?')
+    .run(hmac(code + ':' + user.id + ':' + type), Date.now() + 15 * 60000, user.id);
+  const sujet = type === 'code' ? 'Ton code de vérification' : 'Réinitialisation du mot de passe';
+  const corps = (type === 'code' ? 'Ton code de vérification : ' : 'Ton code de réinitialisation : ')
+    + code + '\nIl est valable 15 minutes. Si tu n\'es pas à l\'origine de cette demande, ignore ce message.';
+  await envoyerMail(user.email, sujet, corps);
+  return true;
+}
+function verifierCode(uid, type, code) {
+  const u = db.prepare('SELECT ' + type + '_hash AS h, ' + type + '_exp AS e, ' + type + '_essais AS n FROM users WHERE id = ?').get(uid);
+  code = String(code || '').replace(/\s/g, '');
+  if (!u || !u.h || !u.e || Date.now() > u.e || (u.n || 0) >= 5 || !/^\d{6}$/.test(code)) return false;
+  db.prepare('UPDATE users SET ' + type + '_essais = COALESCE(' + type + '_essais, 0) + 1 WHERE id = ?').run(uid);
+  if (!S.egal(hmac(code + ':' + uid + ':' + type), u.h)) return false;
+  db.prepare('UPDATE users SET ' + type + '_hash = NULL, ' + type + '_exp = NULL, ' + type + '_essais = 0 WHERE id = ?').run(uid);
+  return true;
+}
+
+/* ---------- Double authentification (TOTP) ---------- */
+const dernierTotp = new Map();
+function secondFacteurOk(uid, code) {
+  const u = db.prepare('SELECT totp, recup FROM users WHERE id = ? AND totp_actif = 1').get(uid);
+  if (!u) return false;
+  code = String(code || '').trim();
+  if (/^\d{3}\s?\d{3}$/.test(code)) {
+    const secret = S.dechiffrer(CLE, u.totp);
+    if (!secret) return false;
+    const c = S.verifierTotp(secret, code, dernierTotp.get(uid) || 0);
+    if (c === null) return false;
+    dernierTotp.set(uid, c);
+    return true;
+  }
+  const n = S.normaliserRecup(code);
+  let liste = [];
+  try { liste = JSON.parse(u.recup || '[]'); } catch (e) {}
+  const h = hmac('recup:' + n);
+  const i = liste.findIndex(x => S.egal(x, h));
+  if (i < 0) return false;
+  liste.splice(i, 1);
+  db.prepare('UPDATE users SET recup = ? WHERE id = ?').run(JSON.stringify(liste), uid);
+  return true;
+}
+const tickets = new Map();
+function nouveauTicket(uid) {
+  const t = crypto.randomBytes(24).toString('hex');
+  if (tickets.size > 2000) tickets.clear();
+  tickets.set(sha(t), { uid, exp: Date.now() + 5 * 60000, n: 0 });
+  return t;
+}
+
+/* ---------- Sessions ---------- */
+function getCookie(req, name) {
+  const m = (req.headers.cookie || '').split(';').map(c => c.trim()).find(c => c.startsWith(name + '='));
+  if (!m) return null;
+  try { return decodeURIComponent(m.slice(name.length + 1)); } catch (e) { return null; }
+}
+const cookieOpts = req =>
+  'HttpOnly; SameSite=Lax; Path=/' + (req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '');
+function startSession(req, res, userId) {
+  const token = crypto.randomBytes(32).toString('hex');
+  db.prepare('INSERT INTO sessions (token, user_id) VALUES (?, ?)').run(sha(token), userId);
+  db.prepare('DELETE FROM sessions WHERE user_id = ? AND token NOT IN ' +
+    '(SELECT token FROM sessions WHERE user_id = ? ORDER BY cree DESC, rowid DESC LIMIT 10)').run(userId, userId);
+  res.setHeader('Set-Cookie', 'sid=' + token + '; Max-Age=2592000; ' + cookieOpts(req));
+}
+function currentUser(req) {
+  const t = getCookie(req, 'sid');
+  if (!t) return null;
+  return db.prepare(
+    'SELECT u.id, u.nom, u.email, u.cree, u.verifie, u.totp_actif FROM sessions s JOIN users u ON u.id = s.user_id ' +
+    "WHERE s.token = ? AND s.cree > datetime('now','-30 days')").get(sha(t)) || null;
+}
+function requireSession(req, res, next) {
+  const u = currentUser(req);
+  if (!u) return bad(res, 'Connexion requise', 401);
+  req.user = u;
+  next();
+}
+function requireAuth(req, res, next) {
+  const u = currentUser(req);
+  if (!u) return bad(res, 'Connexion requise', 401);
+  if (!u.verifie) return bad(res, 'Vérifie d\'abord ton adresse e-mail', 403, { verif: true });
+  req.user = u;
+  next();
+}
+
+/* ---------- Envoi de fichiers ---------- */
+const AUDIO_EXT = ['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg'];
+const IMG_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
+const storage = multer.diskStorage({
+  destination: 'uploads/',
+  filename: (req, file, cb) =>
+    cb(null, crypto.randomBytes(16).toString('hex') + path.extname(file.originalname).toLowerCase())
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 80 * 1024 * 1024, files: 2, fields: 20, fieldSize: 4096 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const ok = file.fieldname === 'audio'
+      ? file.mimetype.startsWith('audio/') && AUDIO_EXT.includes(ext)
+      : file.fieldname === 'pochette' && file.mimetype.startsWith('image/') && IMG_EXT.includes(ext);
+    cb(null, ok);
+  }
+});
+const rm = f => { try { fs.unlinkSync(f.path); } catch (e) {} };
+function sniffOk(file, kind) {
+  let b;
+  try {
+    const fd = fs.openSync(file.path, 'r');
+    b = Buffer.alloc(16);
+    fs.readSync(fd, b, 0, 16, 0);
+    fs.closeSync(fd);
+  } catch (e) { return false; }
+  const asc = (o, n) => b.toString('latin1', o, o + n);
+  if (kind === 'audio') {
+    return asc(0, 3) === 'ID3' || (b[0] === 0xFF && (b[1] & 0xE0) === 0xE0)
+      || asc(0, 4) === 'fLaC' || asc(0, 4) === 'OggS'
+      || (asc(0, 4) === 'RIFF' && asc(8, 4) === 'WAVE') || asc(4, 4) === 'ftyp';
+  }
+  return (b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF)
+    || (b[0] === 0x89 && asc(1, 3) === 'PNG')
+    || (asc(0, 4) === 'RIFF' && asc(8, 4) === 'WEBP');
+}
+
+/* ---------- Limiteurs ---------- */
+const mk = (windowMs, limit, erreur) => rateLimit({ windowMs, limit, message: { ok: false, erreur } });
+const authLimiter = mk(15 * 60 * 1000, 20, 'Trop de tentatives, réessaie dans 15 minutes');
+const registerLimiter = mk(60 * 60 * 1000, 5, 'Trop de créations de compte depuis cette connexion, réessaie plus tard');
+const codeLimiter = mk(10 * 60 * 1000, 10, 'Trop de demandes de code, réessaie dans quelques minutes');
+const actionLimiter = mk(60 * 1000, 30, 'Doucement, réessaie dans une minute');
+const uploadLimiter = mk(60 * 60 * 1000, 20, "Trop d'envois, réessaie plus tard");
+const globalLimiter = mk(60 * 1000, 300, 'Trop de requêtes, ralentis un peu');
+
+/* ---------- Application ---------- */
+const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', 'loopback');
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Content-Security-Policy',
+    "default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; " +
+    "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; " +
+    "base-uri 'none'; form-action 'self'; object-src 'none'");
+  if (req.headers['x-forwarded-proto'] === 'https') res.setHeader('Strict-Transport-Security', 'max-age=15552000');
+  if (req.path.startsWith('/api')) res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
+app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  const o = req.headers.origin;
+  if (!o) return next();
+  let h = '';
+  try { h = new URL(o).host; } catch (e) {}
+  if (h && (h === req.headers.host || h === req.headers['x-forwarded-host'])) return next();
+  return bad(res, 'Origine refusée', 403);
+});
+
+app.use('/api', globalLimiter);
+app.use(express.json({ limit: '10kb' }));
+app.use(express.static('public', { dotfiles: 'deny' }));
+app.use('/uploads', requireAuth, express.static('uploads', {
+  dotfiles: 'deny', index: false,
+  setHeaders: res => {
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+  }
+}));
+
+/* ---------- Comptes ---------- */
+app.post('/api/register', registerLimiter, authLimiter, ah(async (req, res) => {
+  const b = req.body || {};
+  const nom = clean(b.nom, 60);
+  const email = clean(b.email, 120).toLowerCase();
+  const pw = String(b.password || '');
+  if (nom.length < 2) return bad(res, "Nom d'artiste : 2 à 60 caractères");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return bad(res, 'E-mail invalide');
+  const m = verifMdp(pw, email);
+  if (m) return bad(res, m);
+  if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) return bad(res, 'Cet e-mail est déjà utilisé');
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = await hashPw(pw, salt);
+  let id;
+  try {
+    id = Number(db.prepare('INSERT INTO users (nom, email, salt, hash, verifie) VALUES (?, ?, ?, ?, 0)')
+      .run(nom, email, salt, hash).lastInsertRowid);
+  } catch (e) { return bad(res, 'Cet e-mail est déjà utilisé'); }
+  startSession(req, res, id);
+  journaliser(req, id, 'inscription');
+  await emettreCode({ id, email }, 'code');
+  res.json({ ok: true, verifie: false });
+}));
+
+app.post('/api/login', authLimiter, ah(async (req, res) => {
+  const b = req.body || {};
+  const email = clean(b.email, 120).toLowerCase();
+  const pw = String(b.password || '').slice(0, 100);
+  if (verrouille(email)) return bad(res, "Trop d'échecs pour ce compte, réessaie dans 15 minutes", 429);
+  const u = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  const ok = u ? await checkPw(pw, u.salt, u.hash) : await faussePw(pw);
+  if (!ok) { echec(email); journaliser(req, u && u.id, 'connexion refusée'); return bad(res, 'E-mail ou mot de passe incorrect', 401); }
+  if (u.totp_actif) return res.json({ ok: true, etape: '2fa', ticket: nouveauTicket(u.id) });
+  echecs.delete(email);
+  startSession(req, res, u.id);
+  journaliser(req, u.id, 'connexion');
+  res.json({ ok: true, verifie: !!u.verifie });
+}));
+
+app.post('/api/login/2fa', authLimiter, ah(async (req, res) => {
+  const b = req.body || {};
+  const k = sha(String(b.ticket || ''));
+  const t = tickets.get(k);
+  if (!t || Date.now() > t.exp) { tickets.delete(k); return bad(res, 'Session expirée, reconnecte-toi', 401); }
+  if (++t.n > 5) { tickets.delete(k); return bad(res, 'Trop d\'essais, reconnecte-toi', 429); }
+  if (!secondFacteurOk(t.uid, b.code)) { journaliser(req, t.uid, '2FA refusée'); return bad(res, 'Code incorrect', 401); }
+  tickets.delete(k);
+  const u = db.prepare('SELECT id, email, verifie FROM users WHERE id = ?').get(t.uid);
+  echecs.delete(u.email);
+  startSession(req, res, u.id);
+  journaliser(req, u.id, 'connexion 2FA');
+  res.json({ ok: true, verifie: !!u.verifie });
+}));
+
+app.post('/api/logout', (req, res) => {
+  const t = getCookie(req, 'sid');
+  if (t) db.prepare('DELETE FROM sessions WHERE token = ?').run(sha(t));
+  res.setHeader('Set-Cookie', 'sid=; Max-Age=0; ' + cookieOpts(req));
+  res.json({ ok: true });
+});
+
+app.post('/api/logout-tout', requireAuth, (req, res) => {
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(req.user.id);
+  journaliser(req, req.user.id, 'déconnexion de tous les appareils');
+  res.setHeader('Set-Cookie', 'sid=; Max-Age=0; ' + cookieOpts(req));
+  res.json({ ok: true });
+});
+
+app.get('/api/statut', (req, res) => {
+  const u = currentUser(req);
+  res.json({ connecte: !!u, verifie: !!(u && u.verifie), email: u ? u.email : null });
+});
+
+app.get('/api/me', (req, res) => {
+  const u = currentUser(req);
+  res.json(u && u.verifie
+    ? { ok: true, nom: u.nom, email: u.email, depuis: u.cree, deuxfa: !!u.totp_actif }
+    : { ok: false });
+});
+
+/* ---------- Vérification e-mail ---------- */
+app.post('/api/verifier', requireSession, codeLimiter, (req, res) => {
+  if (req.user.verifie) return res.json({ ok: true });
+  if (!verifierCode(req.user.id, 'code', (req.body || {}).code)) {
+    journaliser(req, req.user.id, 'code e-mail refusé');
+    return bad(res, 'Code incorrect ou expiré');
+  }
+  db.prepare('UPDATE users SET verifie = 1 WHERE id = ?').run(req.user.id);
+  journaliser(req, req.user.id, 'e-mail vérifié');
+  res.json({ ok: true });
+});
+
+app.post('/api/renvoyer-code', requireSession, codeLimiter, ah(async (req, res) => {
+  if (req.user.verifie) return res.json({ ok: true });
+  const envoye = await emettreCode(req.user, 'code');
+  res.json({ ok: true, envoye, message: envoye ? 'Nouveau code envoyé' : 'Patiente environ une minute avant de redemander' });
+}));
+
+/* ---------- Mot de passe oublié ---------- */
+app.post('/api/mdp-oublie', codeLimiter, ah(async (req, res) => {
+  const email = clean((req.body || {}).email, 120).toLowerCase();
+  const u = db.prepare('SELECT id, email FROM users WHERE email = ?').get(email);
+  if (u) await emettreCode(u, 'reset');
+  res.json({ ok: true, message: 'Si ce compte existe, un code vient d\'être envoyé' });
+}));
+
+app.post('/api/mdp-reset', authLimiter, ah(async (req, res) => {
+  const b = req.body || {};
+  const email = clean(b.email, 120).toLowerCase();
+  const nouveau = String(b.nouveau || '');
+  const u = db.prepare('SELECT id, email, totp_actif FROM users WHERE email = ?').get(email);
+  const echecMsg = () => bad(res, 'Code incorrect ou expiré');
+  if (!u) return echecMsg();
+  const m = verifMdp(nouveau, email);
+  if (m) return bad(res, m);
+  if (!verifierCode(u.id, 'reset', b.code)) { journaliser(req, u.id, 'reset refusé'); return echecMsg(); }
+  if (u.totp_actif && !secondFacteurOk(u.id, b.code2fa)) { journaliser(req, u.id, 'reset: 2FA refusée'); return bad(res, 'Code de double authentification requis', 401, { besoin2fa: true }); }
+  const salt = crypto.randomBytes(16).toString('hex');
+  db.prepare('UPDATE users SET salt = ?, hash = ?, verifie = 1 WHERE id = ?').run(salt, await hashPw(nouveau, salt), u.id);
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+  echecs.delete(email);
+  journaliser(req, u.id, 'mot de passe réinitialisé');
+  res.json({ ok: true });
+}));
+
+/* ---------- Compte ---------- */
+app.post('/api/compte/nom', requireAuth, actionLimiter, (req, res) => {
+  const nom = clean((req.body || {}).nom, 60);
+  if (nom.length < 2) return bad(res, "Nom d'artiste : 2 à 60 caractères");
+  db.prepare('UPDATE users SET nom = ? WHERE id = ?').run(nom, req.user.id);
+  res.json({ ok: true, nom });
+});
+
+app.post('/api/compte/mot-de-passe', requireAuth, authLimiter, ah(async (req, res) => {
+  const b = req.body || {};
+  const actuel = String(b.actuel || '').slice(0, 100);
+  const nouveau = String(b.nouveau || '');
+  const m = verifMdp(nouveau, req.user.email);
+  if (m) return bad(res, m);
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!u || !(await checkPw(actuel, u.salt, u.hash))) return bad(res, 'Mot de passe actuel incorrect', 401);
+  const salt = crypto.randomBytes(16).toString('hex');
+  db.prepare('UPDATE users SET salt = ?, hash = ? WHERE id = ?').run(salt, await hashPw(nouveau, salt), u.id);
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+  startSession(req, res, u.id);
+  journaliser(req, u.id, 'mot de passe changé');
+  res.json({ ok: true });
+}));
+
+app.get('/api/compte/stats', requireAuth, (req, res) => {
+  const id = req.user.id;
+  const st = db.prepare(`SELECT
+    (SELECT COUNT(*) FROM releases WHERE user_id = ?) AS sorties,
+    (SELECT COUNT(*) FROM likes l JOIN releases r ON r.id = l.release_id WHERE r.user_id = ?) AS likes,
+    (SELECT COUNT(*) FROM comments c JOIN releases r ON r.id = c.release_id WHERE r.user_id = ?) AS commentaires,
+    (SELECT AVG(n.note) FROM ratings n JOIN releases r ON r.id = n.release_id WHERE r.user_id = ?) AS moyenne`)
+    .get(id, id, id, id);
+  res.json({ ok: true, ...st });
+});
+
+app.get('/api/compte/activite', requireAuth, (req, res) => {
+  res.json({ ok: true, evenements: db.prepare(
+    'SELECT date, evenement, ip FROM journal WHERE user_id = ? ORDER BY id DESC LIMIT 15').all(req.user.id) });
+});
+
+/* ---------- Double authentification : gestion ---------- */
+app.get('/api/2fa/statut', requireAuth, (req, res) => {
+  const u = db.prepare('SELECT totp_actif, recup FROM users WHERE id = ?').get(req.user.id);
+  let n = 0;
+  try { n = JSON.parse(u.recup || '[]').length; } catch (e) {}
+  res.json({ ok: true, actif: !!u.totp_actif, codes_restants: n });
+});
+
+app.post('/api/2fa/preparer', requireAuth, actionLimiter, (req, res) => {
+  const u = db.prepare('SELECT totp_actif FROM users WHERE id = ?').get(req.user.id);
+  if (u.totp_actif) return bad(res, 'La double authentification est déjà active');
+  const secret = S.nouveauSecretTotp();
+  db.prepare('UPDATE users SET totp = ? WHERE id = ?').run(S.chiffrer(CLE, secret), req.user.id);
+  const uri = 'otpauth://totp/' + encodeURIComponent('Distributeur Musique:' + req.user.email)
+    + '?secret=' + secret + '&issuer=' + encodeURIComponent('Distributeur Musique');
+  res.json({ ok: true, secret: secret.match(/.{1,4}/g).join(' '), uri });
+});
+
+app.post('/api/2fa/activer', requireAuth, authLimiter, (req, res) => {
+  const u = db.prepare('SELECT totp, totp_actif FROM users WHERE id = ?').get(req.user.id);
+  if (u.totp_actif || !u.totp) return bad(res, 'Lance d\'abord la configuration');
+  const secret = S.dechiffrer(CLE, u.totp);
+  const c = secret && S.verifierTotp(secret, (req.body || {}).code, 0);
+  if (c === null || c === false || !secret) return bad(res, 'Code incorrect : vérifie l\'heure de ton téléphone et réessaie');
+  dernierTotp.set(req.user.id, c);
+  const codes = S.codesRecuperation(8);
+  db.prepare('UPDATE users SET totp_actif = 1, recup = ? WHERE id = ?')
+    .run(JSON.stringify(codes.map(x => hmac('recup:' + S.normaliserRecup(x)))), req.user.id);
+  journaliser(req, req.user.id, '2FA activée');
+  res.json({ ok: true, codes });
+});
+
+app.post('/api/2fa/desactiver', requireAuth, authLimiter, ah(async (req, res) => {
+  const b = req.body || {};
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!u.totp_actif) return res.json({ ok: true });
+  if (!(await checkPw(String(b.password || '').slice(0, 100), u.salt, u.hash))) return bad(res, 'Mot de passe incorrect', 401);
+  if (!secondFacteurOk(u.id, b.code)) return bad(res, 'Code incorrect', 401);
+  db.prepare('UPDATE users SET totp = NULL, totp_actif = 0, recup = NULL WHERE id = ?').run(u.id);
+  journaliser(req, u.id, '2FA désactivée');
+  res.json({ ok: true });
+}));
+
+/* ---------- Liens vers les plateformes ---------- */
+const DOMS = {
+  spotify: ['open.spotify.com', 'spotify.link'],
+  apple: ['music.apple.com'],
+  deezer: ['deezer.com', 'deezer.page.link'],
+  youtube: ['youtube.com', 'youtu.be'],
+  boomplay: ['boomplay.com'],
+  audiomack: ['audiomack.com'],
+  tiktok: ['tiktok.com'],
+  instagram: ['instagram.com']
+};
+const parseLiens = v => {
+  try { const o = JSON.parse(v || '{}'); return o && typeof o === 'object' ? o : {}; }
+  catch (e) { return {}; }
+};
+function cleanUrl(plat, v) {
+  v = String(v || '').trim();
+  if (!v) return '';
+  if (v.length > 300) return null;
+  let u;
+  try { u = new URL(v); } catch (e) { return null; }
+  if (u.protocol !== 'https:' || u.username || u.password) return null;
+  const h = u.hostname.toLowerCase();
+  return DOMS[plat].some(d => h === d || h.endsWith('.' + d)) ? u.href : null;
+}
+app.get('/api/compte/liens', requireAuth, (req, res) => {
+  const row = db.prepare('SELECT liens FROM users WHERE id = ?').get(req.user.id);
+  res.json({ ok: true, liens: parseLiens(row && row.liens) });
+});
+app.post('/api/compte/liens', requireAuth, actionLimiter, (req, res) => {
+  const inp = (req.body || {}).liens || {};
+  const out = {};
+  for (const plat of Object.keys(DOMS)) {
+    const c = cleanUrl(plat, inp[plat]);
+    if (c === null) return bad(res, 'Lien ' + plat + ' invalide : adresse https du site officiel requise');
+    if (c) out[plat] = c;
+  }
+  db.prepare('UPDATE users SET liens = ? WHERE id = ?').run(JSON.stringify(out), req.user.id);
+  res.json({ ok: true, liens: out });
+});
+
+/* ---------- Sorties ---------- */
+const PLATS_OK = ['Spotify', 'Apple Music', 'Deezer', 'YouTube Music', 'Boomplay', 'Audiomack'];
+
+app.get('/api/releases', requireAuth, (req, res) => {
+  res.json(db.prepare('SELECT * FROM releases WHERE user_id = ? ORDER BY id DESC').all(req.user.id));
+});
+
+app.post('/api/releases', requireAuth, uploadLimiter,
+  upload.fields([{ name: 'audio', maxCount: 1 }, { name: 'pochette', maxCount: 1 }]),
+  (req, res) => {
+    const a = req.files && req.files.audio && req.files.audio[0];
+    const c = req.files && req.files.pochette && req.files.pochette[0];
+    const refuse = msg => { if (a) rm(a); if (c) rm(c); return bad(res, msg); };
+    if (!a || !c) return refuse('Audio (mp3, wav, flac, m4a, ogg) et pochette (jpg, png, webp) requis');
+    if (!sniffOk(a, 'audio') || !sniffOk(c, 'image')) return refuse('Fichier invalide ou corrompu');
+    const b = req.body || {};
+    const titre = clean(b.titre, 150);
+    const artiste = clean(b.artiste, 100);
+    if (!titre || !artiste) return refuse('Titre et artiste requis');
+    const date = clean(b.date_sortie, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return refuse('Date de sortie invalide');
+    const isrc = clean(b.isrc, 20).toUpperCase();
+    if (isrc && !/^[A-Z]{2}-?[A-Z0-9]{3}-?\d{2}-?\d{5}$/.test(isrc)) return refuse('Code ISRC invalide');
+    const n = db.prepare('SELECT COUNT(*) AS n FROM releases WHERE user_id = ?').get(req.user.id).n;
+    if (n >= 100) return refuse('Limite de 100 sorties atteinte');
+    const plats = [].concat(b.plateformes || []).map(p => clean(p, 30)).filter(p => PLATS_OK.includes(p)).join(', ');
+    db.prepare(`INSERT INTO releases
+      (titre,artiste,genre,langue,date_sortie,isrc,explicite,plateformes,offre,audio,pochette,user_id)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(titre, artiste, clean(b.genre, 40), clean(b.langue, 40), date, isrc, b.explicite ? 1 : 0,
+           plats, clean(b.offre, 60), '/uploads/' + a.filename, '/uploads/' + c.filename, req.user.id);
+    res.json({ ok: true });
+  });
+
+/* ---------- Page « À juger » ---------- */
+const idOf = req => { const n = Number(req.params.id); return Number.isInteger(n) && n > 0 ? n : 0; };
+const visible = (id, uid) =>
+  db.prepare('SELECT id, user_id FROM releases WHERE id = ? AND (a_juger = 1 OR user_id = ?)').get(id, uid);
+
+app.post('/api/releases/:id/juger', requireAuth, actionLimiter, (req, res) => {
+  const rel = db.prepare('SELECT id, user_id, a_juger FROM releases WHERE id = ?').get(idOf(req));
+  if (!rel || rel.user_id !== req.user.id) return bad(res, 'Morceau introuvable');
+  const v = rel.a_juger ? 0 : 1;
+  db.prepare('UPDATE releases SET a_juger = ? WHERE id = ?').run(v, rel.id);
+  res.json({ ok: true, a_juger: v });
+});
+
+app.get('/api/juger', requireAuth, (req, res) => {
+  const rows = db.prepare(`
+    SELECT r.id, r.titre, r.artiste, r.genre, r.pochette, r.audio, r.user_id,
+      (SELECT COUNT(*) FROM likes l WHERE l.release_id = r.id) AS likes,
+      (SELECT COUNT(*) FROM likes l WHERE l.release_id = r.id AND l.user_id = ?) AS aime,
+      (SELECT AVG(note) FROM ratings n WHERE n.release_id = r.id) AS moyenne,
+      (SELECT COUNT(*) FROM ratings n WHERE n.release_id = r.id) AS nb_notes,
+      (SELECT note FROM ratings n WHERE n.release_id = r.id AND n.user_id = ?) AS ma_note,
+      (SELECT COUNT(*) FROM comments c WHERE c.release_id = r.id) AS nb_coms,
+      (SELECT liens FROM users u WHERE u.id = r.user_id) AS liens
+    FROM releases r WHERE r.user_id IS NOT NULL AND r.a_juger = 1 ORDER BY r.id DESC LIMIT 100`)
+    .all(req.user.id, req.user.id);
+  res.json(rows.map(({ user_id, ...x }) =>
+    ({ ...x, liens: parseLiens(x.liens), aime: x.aime > 0, mien: user_id === req.user.id })));
+});
+
+app.post('/api/releases/:id/like', requireAuth, actionLimiter, (req, res) => {
+  const rel = visible(idOf(req), req.user.id);
+  if (!rel) return bad(res, 'Morceau introuvable');
+  const has = db.prepare('SELECT 1 FROM likes WHERE user_id = ? AND release_id = ?').get(req.user.id, rel.id);
+  if (has) db.prepare('DELETE FROM likes WHERE user_id = ? AND release_id = ?').run(req.user.id, rel.id);
+  else db.prepare('INSERT INTO likes (user_id, release_id) VALUES (?, ?)').run(req.user.id, rel.id);
+  const n = db.prepare('SELECT COUNT(*) AS n FROM likes WHERE release_id = ?').get(rel.id).n;
+  res.json({ ok: true, aime: !has, likes: n });
+});
+
+app.post('/api/releases/:id/note', requireAuth, actionLimiter, (req, res) => {
+  const rel = visible(idOf(req), req.user.id);
+  if (!rel) return bad(res, 'Morceau introuvable');
+  const note = Number((req.body || {}).note);
+  if (!Number.isInteger(note) || note < 1 || note > 5) return bad(res, 'Note de 1 à 5');
+  db.prepare(`INSERT INTO ratings (user_id, release_id, note) VALUES (?, ?, ?)
+    ON CONFLICT(user_id, release_id) DO UPDATE SET note = excluded.note`).run(req.user.id, rel.id, note);
+  const st = db.prepare('SELECT AVG(note) AS m, COUNT(*) AS n FROM ratings WHERE release_id = ?').get(rel.id);
+  res.json({ ok: true, ma_note: note, moyenne: st.m, nb_notes: st.n });
+});
+
+app.get('/api/releases/:id/comments', requireAuth, (req, res) => {
+  const rel = visible(idOf(req), req.user.id);
+  if (!rel) return res.json([]);
+  res.json(db.prepare(`SELECT c.id, c.texte, c.cree, u.nom FROM comments c
+    JOIN users u ON u.id = c.user_id WHERE c.release_id = ? ORDER BY c.id DESC LIMIT 50`).all(rel.id));
+});
+
+app.post('/api/releases/:id/comments', requireAuth, actionLimiter, (req, res) => {
+  const rel = visible(idOf(req), req.user.id);
+  if (!rel) return bad(res, 'Morceau introuvable');
+  const texte = clean((req.body || {}).texte, 300);
+  if (!texte) return bad(res, 'Commentaire vide');
+  db.prepare('INSERT INTO comments (release_id, user_id, texte) VALUES (?, ?, ?)').run(rel.id, req.user.id, texte);
+  const n = db.prepare('SELECT COUNT(*) AS n FROM comments WHERE release_id = ?').get(rel.id).n;
+  res.json({ ok: true, nb_coms: n });
+});
+
+/* ---------- Erreurs ---------- */
+app.use('/api', (req, res) => bad(res, 'Introuvable', 404));
+app.use((err, req, res, next) => {
+  const limite = err && typeof err.code === 'string' && err.code.startsWith('LIMIT_');
+  if (!limite) console.error(err);
+  if (res.headersSent) return next(err);
+  bad(res, err && err.code === 'LIMIT_FILE_SIZE' ? 'Fichier trop volumineux (80 Mo maximum)' : 'Requête invalide');
+});
+
+app.listen(PORT, '127.0.0.1', () => console.log('Serveur sur http://localhost:' + PORT + ' (accès local uniquement)'
+  + (transport ? '' : ' | e-mail non configuré : les codes s\'affichent dans serveur.log')));
